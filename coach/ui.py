@@ -1175,7 +1175,11 @@ def index():
 
             if options["jev"]:
                 suspects = suspect_payload(sentence, alignment)
-                if suspects:
+                if not jev.configured():
+                    jev_label.set_text(
+                        "Jev on but not configured — set jev.api_key in "
+                        "coach.yaml or the JEV_API_KEY env (see README)")
+                elif suspects:
                     # 3-5s provider round trip — run it behind the read-back
                     # playback instead of blocking on it. Verdict paints when
                     # it lands; stale() guards the label write.

@@ -19,8 +19,8 @@ import time
 
 import httpx
 
-API_URL = os.environ.get("EXP_API", "https://api.experientiallabs.ai/v1/systemone")
-MODEL = "jev-latest"
+DEFAULT_API_URL = "https://api.experientiallabs.ai/v1/systemone"  # noqa: vendor default
+DEFAULT_MODEL = "jev-latest"
 
 # The endpoint validates its own model output (a decision inconsistent with its
 # probability distribution comes back as an error). That is a bad sample, not a
@@ -59,26 +59,75 @@ PRON_LEVELS = [
     "Failed: words are missing from the transcript where the reader clearly attempted them; the ASR produced nothing usable.",
 ]
 
+def _endpoint() -> tuple[str, str]:
+    """(api_url, model) — env overrides coach.yaml overrides defaults."""
+    api, model = DEFAULT_API_URL, DEFAULT_MODEL
+    try:
+        from .config import load
+        s = load()
+        api = s.jev_api or api
+        model = s.jev_model or model
+    except Exception:
+        pass
+    api = os.environ.get("EXP_API", api)
+    return api, model
+
+
+def _yaml_key() -> str:
+    try:
+        from .config import load
+        return load().jev_api_key
+    except Exception:
+        return ""
+
+
 def _key() -> str:
-    key = os.environ.get("EXPERIENTIAL_API_KEY")
+    """API key: JEV_API_KEY env, coach.yaml jev.api_key, then the macOS
+    keychain (service 'jev_api_key')."""
+    key = os.environ.get("JEV_API_KEY") or _yaml_key()
     if key:
-        return key
+        return key.strip()
     try:
         out = subprocess.run(
             ["security", "find-generic-password", "-a", os.environ.get("USER", ""),
-             "-s", "experiential_api_key", "-w"],
+             "-s", "jev_api_key", "-w"],
             capture_output=True, text=True, timeout=5,
         )
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(
-            "Keychain lookup timed out (service: experiential_api_key)"
+            "Keychain lookup timed out (service: jev_api_key)"
         ) from e
     if out.returncode != 0 or not out.stdout.strip():
         raise RuntimeError(
-            "No EXPERIENTIAL_API_KEY env and no Keychain entry "
-            "(service: experiential_api_key)"
+            "No JEV_API_KEY env, no jev.api_key in coach.yaml, and no "
+            "Keychain entry (service: jev_api_key)"
         )
     return out.stdout.strip()
+
+
+def _cheap_key() -> str | None:
+    """Key from env/config only — no subprocess, safe for a UI gate."""
+    return (os.environ.get("JEV_API_KEY") or _yaml_key() or None)
+
+
+_CONFIGURED: bool | None = None
+
+
+def configured() -> bool:
+    """Cheap gate: is there any way to authenticate? Cached per process.
+    Env/config keys answer without the keychain; a keychain entry is checked
+    once and remembered."""
+    global _CONFIGURED
+    if _CONFIGURED is None:
+        if _cheap_key():
+            _CONFIGURED = True
+        else:
+            try:
+                _key()
+                _CONFIGURED = True
+            except RuntimeError:
+                _CONFIGURED = False
+    return _CONFIGURED
 
 
 def judge_sentence(sentence: str, transcript: str, suspects: list[dict]) -> dict:
@@ -86,7 +135,14 @@ def judge_sentence(sentence: str, transcript: str, suspects: list[dict]) -> dict
 
     suspects: [{"index": i, "word": "quiet", "status": "sub"|"skip", "spoken": "quick"|None}]
     Returns {"read": {i: prob}, "category": {i: {...}}, "pronunciation": score}.
+    Raises RuntimeError when no API key is configured — gate with configured().
     """
+    if not configured():
+        raise RuntimeError(
+            "Jev is not configured — set JEV_API_KEY (or jev.api_key in "
+            "coach.yaml) and, optionally, jev.api / jev.model"
+        )
+    _, model = _endpoint()
     questions: dict = {}
 
     for s in suspects[:10]:
@@ -143,7 +199,7 @@ def judge_sentence(sentence: str, transcript: str, suspects: list[dict]) -> dict
         "note": "The transcript comes from a streaming ASR reading the passage aloud.",
     }
 
-    data = _post({"state": state, "model": MODEL, "questions": questions})
+    data = _post({"state": state, "model": model, "questions": questions})
 
     read: dict[int, float] = {}
     category: dict[int, dict] = {}
@@ -181,8 +237,9 @@ def _post(payload: dict) -> dict:
         if attempt:
             time.sleep(_RETRY_DELAYS_S[attempt - 1])
         try:
+            api_url, _ = _endpoint()
             resp = httpx.post(
-                API_URL,
+                api_url,
                 headers={"Authorization": f"Bearer {_key()}",
                          "Content-Type": "application/json"},
                 json=payload,

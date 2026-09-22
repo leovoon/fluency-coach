@@ -79,6 +79,9 @@ class Settings:
     tts_engine: str
     tts_voice: str
     tts_lang: str
+    jev_api: str
+    jev_model: str
+    jev_api_key: str
     melody: bool
     flow: bool
     phonemes: bool
@@ -159,6 +162,9 @@ def _defaults() -> dict:
         "tts_engine": "kokoro",
         "tts_voice": DEFAULT_TTS_VOICE,
         "tts_lang": DEFAULT_TTS_LANG,
+        "jev_api": "",
+        "jev_model": "",
+        "jev_api_key": "",
         "melody": True,
         "flow": True,
         "phonemes": False,
@@ -212,10 +218,24 @@ def _apply_yaml(fields: dict, raw: dict, identity_only: bool = False) -> None:
             fields["tts"] = _as_bool(tts["enabled"], "tts.enabled")
     elif isinstance(tts, (bool, str)) and not identity_only:
         fields["tts"] = _as_bool(tts, "tts")
+    jev = raw.get("jev")
+    if isinstance(jev, dict):
+        if "api" in jev and jev["api"]:
+            fields["jev_api"] = str(jev["api"]).strip()
+        if "model" in jev and jev["model"]:
+            fields["jev_model"] = str(jev["model"]).strip()
+        if "api_key" in jev and jev["api_key"]:
+            fields["jev_api_key"] = str(jev["api_key"]).strip()
     if not identity_only:
-        for key in ("melody", "flow", "phonemes", "jev", "ref_compare"):
+        for key in ("melody", "flow", "phonemes", "ref_compare"):
             if key in raw:
                 fields[key] = _as_bool(raw[key], key)
+        # jev is either a flat bool switch or a mapping (api/model) — a mapping
+        # implies the feature is on unless a flat jev key also sets it false.
+        if isinstance(raw.get("jev"), (bool, str)):
+            fields["jev"] = _as_bool(raw["jev"], "jev")
+        elif isinstance(raw.get("jev"), dict):
+            fields["jev"] = True
         if "read_back" in raw:
             fields["tts"] = _as_bool(raw["read_back"], "read_back")
     if "data_dir" in raw and raw["data_dir"]:
@@ -270,6 +290,9 @@ def _build(fields: dict) -> Settings:
         tts_engine=engine,
         tts_voice=str(fields["tts_voice"]).strip() or DEFAULT_TTS_VOICE,
         tts_lang=str(fields["tts_lang"]).strip() or DEFAULT_TTS_LANG,
+        jev_api=str(fields["jev_api"]).strip(),
+        jev_model=str(fields["jev_model"]).strip(),
+        jev_api_key=str(fields["jev_api_key"]).strip(),
         melody=bool(fields["melody"]),
         flow=bool(fields["flow"]),
         phonemes=bool(fields["phonemes"]),

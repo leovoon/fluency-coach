@@ -116,7 +116,21 @@ Jev is a charged hosted call, used after a recording only: it judges whether
 flagged words were actually read, classifies the error, and rates
 pronunciation — one call per attempt, only when the diff flags suspects.
 Leave it off unless you mean to spend a request. The UI switch is labeled
-"jev (charged)".
+"jev (charged)". It is fully optional: without configuration the app labels
+the switch's outcome and carries on.
+
+Configure it in `coach.yaml` (this file is machine-local and gitignored —
+safe for a key):
+
+```yaml
+jev:
+  api: https://your-endpoint.example/v1/systemone   # optional — default ships in coach/jev.py
+  model: jev-latest                                 # optional, this is the default
+  api_key: my-key-here                              # or env JEV_API_KEY
+```
+
+Key resolution order: `JEV_API_KEY` env → `jev.api_key` in `coach.yaml` →
+macOS keychain entry (`jev_api_key`).
 
 ## Run
 
