@@ -1,0 +1,11 @@
+nicegui
+numpy
+sounddevice
+soundfile
+librosa
+moondream>=2.4.0
+pykokoro
+httpx
+torch
+transformers
+phonemizer
