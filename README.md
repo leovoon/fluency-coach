@@ -47,6 +47,15 @@ cd fluid-poc && swift build -c release
 The UI spawns and manages this worker automatically (`fluidpoc --worker`).
 No HF token is required for the TTS models.
 
+### Progress history
+
+Every scored attempt appends one row to `~/.fluency-coach/history.jsonl` —
+WER, flattened beats, missed breaths, choppy links, hesitations. A small
+line under the mark legends compares this week's medians to last week's.
+There are no ratings and no self-judgment: only counts the scoring pass
+already computed. For a trend that cannot drift with your improving
+reference recordings, re-read a fixed checkpoint passage weekly.
+
 ### Teaching voices
 
 The **teaching voice** card records or uploads a 2–30s clip, names it, and

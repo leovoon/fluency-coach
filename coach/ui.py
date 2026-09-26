@@ -16,6 +16,7 @@ single-user localhost app.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import secrets
 import sys
@@ -28,6 +29,7 @@ from fastapi import Request
 
 from . import diff as diffmod
 from . import flow, jev, melody, models, phonemes, prominence, record, reference, rhythm
+from . import progress as attempt_history
 
 
 def _poll_tts_stage(status) -> None:
@@ -350,6 +352,9 @@ def index(passage: str | None = None):
             stress_legend = ui.label(".... = beat you flattened · • = small word you pushed")
             stress_legend.tooltip("the reference gives some words more energy than others; "
                                   "dotted underline: push that word more · dot: keep it light")
+            trend_label = ui.label(attempt_history.weekly_summary(
+                attempt_history.load_rows(settings.data_dir))).classes(
+                "text-xs text-gray-500 whitespace-pre-line mt-1")
 
     def _stress_marks(sentence: str) -> dict[int, str] | None:
         """Prominence marks, you vs reference. None until both sides exist."""
@@ -1320,6 +1325,22 @@ def index(passage: str | None = None):
                 result_state["user_st"] = user_st
             result_state.update(alignment=alignment, arrows=arrows, marks=marks)
             _paint_result(sentence)
+
+            # attempt history: persist what this pass already computed
+            row = attempt_history.collect_metrics(
+                alignment, marks, result_state.get("stress"),
+                str(wav) if wav else None)
+            row.update({"passage": hashlib.sha1(
+                            passage_input.value.encode()).hexdigest()[:8],
+                        "sentence_text": sentences[current["i"]][:60],
+                        "sentence": current["i"] + 1,
+                        "tier": settings.tier, "engine": settings.tts_engine})
+            try:
+                attempt_history.log_attempt(settings.data_dir, row)
+            except Exception:
+                pass  # history is a nice-to-have; never block an attempt
+            trend_label.set_text(attempt_history.weekly_summary(
+                attempt_history.load_rows(settings.data_dir)))
 
             if alignment.spoken_words:
                 extra_label.set_text(
