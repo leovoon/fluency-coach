@@ -37,9 +37,18 @@ from . import jev, melody, models, phonemes, record
 from .config import load, passage_arg
 
 DEFAULT_PASSAGE = (
-    "The quiet forest woke slowly under a pale morning sky. "
-    "Somewhere above the ridge, a single bird tested its voice, "
-    "and the sound rolled down the valley like water over smooth stones."
+    "This app was built to help you read aloud with better melody and rhythm. "
+    "It is written in Python, and the screen you see is a NiceGUI web page "
+    "served to your browser. "
+    "When you read a sentence, a Parakeet speech model listens and writes "
+    "down exactly what you said. "
+    "A PocketTTS model then reads it back in a cloned voice, running on the "
+    "Apple Neural Engine, and every single word is spoken in that same voice. "
+    "Your recording and the model read are compared word by word, so pauses, "
+    "pitch, and stress become the marks you see on screen. "
+    "Everything runs locally on this machine, and a browser extension can "
+    "grab any article and turn it into a practice session. "
+    "You are, right now, reading how the app you are using was built."
 )
 
 GREEN, RED, YELLOW, GRAY, BOLD, DIM, RESET = (

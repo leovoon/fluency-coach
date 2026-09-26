@@ -25,7 +25,7 @@ DEFAULT_PORT = 8080
 
 TIERS = ("lite", "standard", "pro")
 DEVICE_PREFS = ("auto", "cpu", "mps", "cuda")
-TTS_ENGINES = ("kokoro", "system", "none")
+TTS_ENGINES = ("kokoro", "pocket", "chatterbox", "system", "none")
 
 # Feature bundle plus the TTS engine that bundle implies.
 _PRESETS: dict[str, dict] = {
@@ -79,6 +79,8 @@ class Settings:
     tts_engine: str
     tts_voice: str
     tts_lang: str
+    tts_ref_wav: str
+    tts_ref_text: str
     jev_api: str
     jev_model: str
     jev_api_key: str
@@ -162,6 +164,8 @@ def _defaults() -> dict:
         "tts_engine": "kokoro",
         "tts_voice": DEFAULT_TTS_VOICE,
         "tts_lang": DEFAULT_TTS_LANG,
+        "tts_ref_wav": "",
+        "tts_ref_text": "",
         "jev_api": "",
         "jev_model": "",
         "jev_api_key": "",
@@ -214,6 +218,10 @@ def _apply_yaml(fields: dict, raw: dict, identity_only: bool = False) -> None:
             fields["tts_voice"] = str(tts["voice"]).strip()
         if "lang" in tts:
             fields["tts_lang"] = str(tts["lang"]).strip()
+        if "ref_wav" in tts:
+            fields["tts_ref_wav"] = os.path.expandvars(str(tts["ref_wav"])).strip()
+        if "ref_text" in tts:
+            fields["tts_ref_text"] = str(tts["ref_text"]).strip()
         if "enabled" in tts and not identity_only:
             fields["tts"] = _as_bool(tts["enabled"], "tts.enabled")
     elif isinstance(tts, (bool, str)) and not identity_only:
@@ -265,9 +273,18 @@ def _build(fields: dict) -> Settings:
     engine = str(fields["tts_engine"]).strip().lower()
     if engine not in TTS_ENGINES:
         raise RuntimeError(
-            f"tts.engine must be kokoro, system, or none (got {engine!r})"
+            f"tts.engine must be kokoro, pocket, chatterbox, system, or none (got {engine!r})"
         )
     fields["tts_engine"] = engine
+    ref_wav = str(fields.get("tts_ref_wav", "")).strip()
+    ref_text = str(fields.get("tts_ref_text", "")).strip()
+    # A cloning engine without a teaching voice is allowed to start: the
+    # UI's teaching-voice card saves one, and the worker raises a friendly
+    # error if a read is attempted before that.
+    if ref_wav and not Path(ref_wav).expanduser().exists():
+        raise RuntimeError(f"tts.ref_wav not found: {ref_wav}")
+    fields["tts_ref_wav"] = ref_wav
+    fields["tts_ref_text"] = ref_text
     asr_engine = str(fields["asr_engine"]).strip().lower() or "photon"
     fields["asr_engine"] = asr_engine
     if not str(fields["asr_id"]).strip():
@@ -290,6 +307,8 @@ def _build(fields: dict) -> Settings:
         tts_engine=engine,
         tts_voice=str(fields["tts_voice"]).strip() or DEFAULT_TTS_VOICE,
         tts_lang=str(fields["tts_lang"]).strip() or DEFAULT_TTS_LANG,
+        tts_ref_wav=str(fields["tts_ref_wav"]).strip(),
+        tts_ref_text=str(fields["tts_ref_text"]).strip(),
         jev_api=str(fields["jev_api"]).strip(),
         jev_model=str(fields["jev_model"]).strip(),
         jev_api_key=str(fields["jev_api_key"]).strip(),

@@ -5,3 +5,11 @@ data/
 coach.yaml
 *.wav
 .DS_Store
+.venv-ab/
+
+# Swift package builds
+.build/
+fluid-poc/.build/
+# A/B harness output
+ab_out/
+*.log

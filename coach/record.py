@@ -21,6 +21,12 @@ MAX_DURATION_S = 30.0
 
 # One lock for capture and playback so two clicks cannot open two streams.
 _AUDIO = threading.Lock()
+_STOP = threading.Event()   # set by the UI stop button to end capture early
+
+
+def stop_recording() -> None:
+    """Signal the active recording to finish now."""
+    _STOP.set()
 
 
 def play_wav(path) -> None:
@@ -42,8 +48,10 @@ def play_wav_slice(path, start: float, end: float, pad: float = 0.05) -> None:
 
 
 def record_utterance() -> Path:
-    """Block until the user speaks and stops. Returns the wav path."""
+    """Block until the user speaks and stops (or hits stop / the cap).
+    Returns the wav path."""
     with _AUDIO:
+        _STOP.clear()
         try:
             return _record_utterance()
         except sd.PortAudioError as e:
@@ -83,6 +91,8 @@ def _record_utterance() -> Path:
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                         blocksize=FRAME) as stream:
         while collected < max_frames:
+            if _STOP.is_set():
+                break
             data, _ = stream.read(FRAME)
             mono = data[:, 0]
             frames.append(mono.copy())

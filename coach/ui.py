@@ -17,22 +17,37 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import secrets
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 from nicegui import background_tasks, run, ui
+from fastapi import Request
 
 from . import diff as diffmod
 from . import flow, jev, melody, models, phonemes, prominence, record, reference, rhythm
-from .config import load
-from .main import load_passage, suspect_payload
 
-DEFAULT_PASSAGE_TEXT = (
-    "The quiet forest woke slowly under a pale morning sky. "
-    "Somewhere above the ridge, a single bird tested its voice, "
-    "and the sound rolled down the valley like water over smooth stones."
-)
+
+def _poll_tts_stage(status) -> None:
+    """Live load/render progress while the TTS thread works — replaces the
+    silent spinner with what the engine is actually doing."""
+    stage = models.tts_load_stage()
+    if stage:
+        status.set_text(stage)
+from .config import load
+from .main import DEFAULT_PASSAGE, load_passage, suspect_payload
+
+# Passages pushed by the browser extension, keyed by one-shot token.
+# Bounded so a forgotten tab cannot grow this forever.
+_extension_passages: dict[str, str] = {}
+
+
+def _split_sentences(text: str) -> list[str]:
+    import re
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+
 
 WORD_COLOR = {
     "match": "text-green-600",
@@ -45,7 +60,7 @@ ARROW_COLOR = {"up": "text-amber-500", "down": "text-green-600",
 
 NO_VOICE = "no voice model in this tier — record a reference to compare"
 NEED_REF_CHUNK = "record a reference to hear this chunk"
-MODEL_READ = "model read (not a native speaker)"
+MODEL_READ = "model read (not a native speaker)"  # engine-specific label: models.model_read_label()
 
 
 def _template_passages() -> dict[str, str]:
@@ -218,19 +233,23 @@ def colored_passage(sentence: str, alignment: diffmod.Alignment | None,
                 if sp == "flat":
                     label.classes(
                         "underline decoration-dotted decoration-amber-500 underline-offset-4")
-                    label.tooltip("the reference pushes this word — give it more "
-                                  "energy; your read flattened it")
+                    label.tooltip("stress this")
                 elif sp == "extra" and not d:
                     dot = ui.label("•").classes("text-xs text-gray-400")
-                    dot.tooltip("a small word you pushed — the reference keeps "
-                                "it light")
+                    dot.tooltip("too loud — go lighter")
             mark_label(wi)
 
 
 @ui.page("/")
-def index():
+def index(passage: str | None = None):
     settings = _settings()
-    sentences: list[str] = load_passage(None)
+    read_label = models.model_read_label()
+    # A ?passage=<token> URL comes from the browser extension. The token
+    # stays in the store (bounded) so reloading the coach tab re-loads the
+    # same text instead of falling back to the default passage.
+    pushed = _extension_passages.get(passage) if passage else None
+    initial_text = pushed or DEFAULT_PASSAGE
+    sentences: list[str] = load_passage(None) if pushed is None else _split_sentences(pushed)
     current = {"i": 0}
     jump_guard = {"on": False}  # suppress on_jump while show_sentence syncs the select
     recording = {"on": False}
@@ -286,6 +305,8 @@ def index():
         with ui.row().classes('gap-2 items-center'):
             record_btn = ui.button("record", icon="mic").props(
                 'unelevated color=primary size=lg')
+            stop_btn = ui.button("stop", icon="stop").props(
+                'flat color=negative size=lg').classes('hidden')
             jump_select = ui.select(
                 {i: f"{i + 1}. {s[:40]}" for i, s in enumerate(sentences)},
                 value=0, label="sentence", on_change=on_jump,
@@ -462,11 +483,22 @@ def index():
             with ui.row().classes('gap-2 items-center'):
                 ui.button('use this template', icon='auto_stories').props(
                     'flat dense').on_click(_use_template)
-        passage_input = ui.textarea("passage", value=DEFAULT_PASSAGE_TEXT
+        passage_input = ui.textarea("passage", value=initial_text
                                     ).classes("w-full")
         with ui.row().classes('gap-2'):
             load_btn = ui.button("load passage").props('flat dense')
             read_all_btn = ui.button("read whole passage", icon="campaign").props('flat dense')
+
+            async def _on_passage_file(e) -> None:
+                if recording["on"]:
+                    return
+                passage_input.value = (await e.file.read()).decode("utf-8", "ignore")
+                load_passage_text()
+
+            ui.upload(label="or upload a .txt passage", multiple=False,
+                      on_upload=_on_passage_file
+                      ).props("accept=.txt,text/plain,dont-verify") \
+             .classes("max-w-xs").props('dense')
 
     with ui.card().classes('w-full bg-gray-50'):
         ui.label('LAYERS & VOICE').classes('text-xs text-gray-400 tracking-wide')
@@ -509,18 +541,133 @@ def index():
                     if result_state.get("alignment") is not None:
                         background_tasks.create(refresh_ref_arrows())
 
-            _voice_opts = {
-                v: v
-                for group, vs in models.KOKORO_VOICES.items()
-                for v in vs
-            }
-            with ui.row().classes("gap-1 items-center"):
-                ui.label("voice — the model read and read-back you'll hear").classes(
-                    "text-xs text-gray-500")
-                ui.select(
-                    _voice_opts, value=models.current_voice(),
-                    on_change=_on_voice,
-                ).props("dense outlined").classes("w-44")
+            if settings.tts_engine == "kokoro":
+                # Chatterbox/PocketTTS have no preset voice menu — the model
+                # model, Air speaks in the reference clip's voice.
+                _voice_opts = {
+                    v: v
+                    for group, vs in models.KOKORO_VOICES.items()
+                    for v in vs
+                }
+                with ui.row().classes("gap-1 items-center"):
+                    ui.label("voice — the model read and read-back you'll hear").classes(
+                        "text-xs text-gray-500")
+                    ui.select(
+                        _voice_opts, value=models.current_voice(),
+                        on_change=_on_voice,
+                    ).props("dense outlined").classes("w-44")
+
+
+        if settings.tts_engine == "pocket":
+            cur_voice = models.model_voice_path()
+            ui.label("teaching voice — what the model read sounds like").classes(
+                "text-xs text-gray-400 mt-2")
+            voice_status = ui.label(
+                f"current clip: {cur_voice.name}" if cur_voice else
+                "none yet — record or upload a 3–30s clip of the voice to imitate"
+            ).classes("text-xs text-gray-500")
+            pending_voice: dict = {}
+
+            async def _save_voice() -> None:
+                if not pending_voice.get("wav"):
+                    voice_status.set_text("record or upload a clip first")
+                    return
+                try:
+                    res = models.save_voice(voice_name.value or "voice",
+                                            pending_voice["wav"])
+                    Path(pending_voice["wav"]).unlink(missing_ok=True)
+                    pending_voice.clear()
+                    voices_gallery.refresh()
+                    note = ", trimmed" if res["trimmed"] else ""
+                    voice_status.set_text(
+                        f"saved + active: {res['name']} ({res['duration']:.1f}s{note})")
+                except Exception as e:
+                    voice_status.set_text(f"failed: {str(e)[:140]}")
+
+            def _activate_voice(n: str) -> None:
+                try:
+                    res = models.activate_voice(n)
+                    voices_gallery.refresh()
+                    voice_status.set_text(
+                        f"switched to {res['name']} ({res['duration']:.1f}s) — "
+                        "next model read uses it")
+                except Exception as e:
+                    voice_status.set_text(f"failed: {str(e)[:140]}")
+
+            async def _delete_voice(n: str) -> None:
+                models.delete_voice(n)
+                voices_gallery.refresh()
+                voice_status.set_text(f"deleted {n}")
+
+            async def _play_voice(p: str) -> None:
+                from . import record
+                await run.io_bound(record.play_wav, p)
+
+            async def _record_voice() -> None:
+                voice_status.set_text("recording — the voice speaking naturally…")
+                try:
+                    pending_voice["wav"] = await run.io_bound(record.record_utterance)
+                except Exception as e:
+                    voice_status.set_text(f"record failed: {str(e)[:120]}")
+                    return
+                import soundfile as sf
+                dur = sf.info(str(pending_voice["wav"])).duration
+                voice_status.set_text(
+                    f"clip captured ({dur:.1f}s) — save it as the teaching voice")
+
+            async def _on_voice_file(e) -> None:
+                fd, tmp = tempfile.mkstemp(suffix=Path(e.file.name).suffix or ".wav")
+                import os as _os
+                _os.close(fd)
+                tmp = Path(tmp)
+                try:
+                    tmp.write_bytes(await e.file.read())
+                    import soundfile as sf
+                    dur = sf.info(str(tmp)).duration
+                except Exception as ex:
+                    tmp.unlink(missing_ok=True)
+                    voice_status.set_text(
+                        f"could not read {e.file.name}: {str(ex)[:100]} — "
+                        "use wav, flac, ogg or aiff")
+                    return
+                pending_voice["wav"] = tmp
+                voice_status.set_text(
+                    f"uploaded {e.file.name} ({dur:.1f}s) — save it as the teaching voice")
+
+            voice_name = ui.input("voice name", value="my voice").classes("w-40")
+            with ui.row().classes("gap-2 items-center w-full"):
+                ui.button("record clip", icon="mic").props(
+                    "flat dense").on_click(_record_voice)
+                ui.upload(auto_upload=True, on_upload=_on_voice_file
+                          ).props("accept=.wav,.flac,.ogg,.aiff,.aif,.mp3,dont-verify") \
+                 .classes("max-w-xs").props("dense")
+                ui.button("save", icon="record_voice_over").props(
+                    "flat dense").on_click(_save_voice)
+
+            @ui.refreshable
+            def voices_gallery() -> None:
+                voices = models.list_voices()
+                if not voices:
+                    ui.label("no saved voices yet").classes("text-xs text-gray-400")
+                    return
+                with ui.column().classes("gap-1 w-full"):
+                    ui.label("voices gallery — click a name to switch").classes(
+                        "text-xs text-gray-400")
+                    for v in voices:
+                        with ui.row().classes("gap-1 items-center"):
+                            label = f"{v['name']} ({v['duration']:.0f}s)" + (
+                                " — active" if v["active"] else "")
+                            ui.button(label, icon="record_voice_over").props(
+                                "flat dense").classes("text-xs").on_click(
+                                    lambda _, n=v["name"]: _activate_voice(n))
+                            ui.button("play", icon="play_arrow").props(
+                                "flat dense").classes("text-xs").on_click(
+                                    lambda _, p=v["path"]: _play_voice(p))
+                            ui.button("delete", icon="delete").props(
+                                "flat dense").classes("text-xs").on_click(
+                                    lambda _, n=v["name"]: _delete_voice(n))
+
+            voices_gallery()
 
     def set_nav(enabled: bool) -> None:
         for el in (prev_btn, next_btn, load_btn, jump_select):
@@ -792,7 +939,7 @@ def index():
                 status.set_text("playing your saved reference…")
                 await run.io_bound(record.play_wav, reference.path_for(sentence))
             elif _tts_allowed(settings, options):
-                status.set_text(f"no saved reference — playing {MODEL_READ}…")
+                status.set_text(f"no saved reference — playing {read_label}…")
                 await run.io_bound(models.speak, sentence)
             elif not settings.tts:
                 status.set_text(NO_VOICE)
@@ -842,7 +989,26 @@ def index():
         if human:
             ref_wav = reference.path_for(sentence)
         elif need_audio and _tts_allowed(settings, options):
-            ref_wav = await run.io_bound(models.synthesize, sentence)
+            prev_status = status.text
+            done = {"now": False}
+
+            async def _poll_stage() -> None:
+                while not done["now"]:
+                    stage = models.tts_load_stage()
+                    if stage:
+                        status.set_text(stage)
+                    await asyncio.sleep(0.4)
+
+            # NOTE: no ui.timer here — background tasks may not create UI
+            # elements; a plain task that only updates the existing label is
+            # the legal shape.
+            poll_task = asyncio.create_task(_poll_stage())
+            try:
+                ref_wav = await run.io_bound(models.synthesize, sentence)
+            finally:
+                done["now"] = True
+                await asyncio.gather(poll_task, return_exceptions=True)
+                status.set_text(prev_status)
             is_tmp = True
             if stale(token):
                 Path(ref_wav).unlink(missing_ok=True)
@@ -922,7 +1088,7 @@ def index():
         result_state["ref_gaps"] = ref_gaps
         result_state["groups"] = groups
         # Label from the saved reference, never from "a path was passed".
-        src = "your saved reference" if human else MODEL_READ
+        src = "your saved reference" if human else read_label
 
         if alignment is None:
             # Repaint the guide only when a human reference was measured — its
@@ -980,7 +1146,7 @@ def index():
                     status.set_text("playing your saved reference…")
                     await run.io_bound(record.play_wav, reference.path_for(sentence))
                 elif _tts_allowed(settings, options):
-                    status.set_text(f"reading {MODEL_READ}…")
+                    status.set_text(f"reading {read_label}…")
                     await run.io_bound(models.speak, sentence)
                 elif not settings.tts:
                     status.set_text(NO_VOICE)
@@ -1065,6 +1231,8 @@ def index():
         set_nav(False)
         record_btn.disable()
         record_btn.props('loading')
+        stop_btn.classes(remove='hidden')
+        stop_btn.enable()
         ref_rec_btn.disable()
         hear_user_btn.disable()
         wav = None
@@ -1203,7 +1371,7 @@ def index():
                 status.set_text("playing your saved reference…")
                 await run.io_bound(record.play_wav, reference.path_for(sentence))
             elif _tts_allowed(settings, options):
-                status.set_text(f"read-back — {MODEL_READ}…")
+                status.set_text(f"read-back — {read_label}…")
                 await run.io_bound(models.speak, sentence)
             elif not settings.tts:
                 status.set_text(NO_VOICE)
@@ -1231,6 +1399,8 @@ def index():
             recording["on"] = False
             record_btn.props(remove='loading')
             record_btn.enable()
+            stop_btn.classes(add='hidden')
+            stop_btn.disable()
             ref_rec_btn.enable()
             set_nav(True)
 
@@ -1247,6 +1417,7 @@ def index():
         show_sentence()
 
     record_btn.on_click(on_record)
+    stop_btn.on_click(lambda: record.stop_recording())
     prev_btn.on_click(on_prev)
     next_btn.on_click(on_next)
     read_all_btn.on_click(on_read_all)
@@ -1260,6 +1431,30 @@ def index():
 
 def main() -> None:
     settings = _settings()
+
+    from nicegui import app
+
+    # app is the FastAPI application in NiceGUI 3.x
+    async def _extension_passage(request: Request) -> dict:
+        """Accept page text from the fluency coach browser extension."""
+        try:
+            body = await request.json()
+        except Exception:
+            return {"error": "json body required"}
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return {"error": "empty text"}
+        text = text[:20000]
+        token = secrets.token_hex(8)
+        _extension_passages[token] = text
+        while len(_extension_passages) > 50:
+            _extension_passages.pop(next(iter(_extension_passages)))
+        host = "127.0.0.1" if settings.host in ("0.0.0.0", "::", "") else settings.host
+        url = f"http://{host}:{int(settings.port)}/?passage={token}"
+        return {"token": token, "url": url}
+
+    app.add_api_route("/extension/passage", _extension_passage, methods=["POST"])
+
     ui.run(title="fluency coach", host=settings.host, port=int(settings.port),
            reload=False)
 

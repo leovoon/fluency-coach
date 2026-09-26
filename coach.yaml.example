@@ -1,0 +1,26 @@
+# fluency-coach config — copy to coach.yaml and edit.
+# Own-voice reference always wins over any model read.
+
+# tier: lite for weak CPUs (no melody, flow, phonemes, jev, or TTS).
+# device: auto | cpu | mps | cuda
+
+#asr:
+#  engine: photon
+#  id: moondream/parakeet-redux
+
+# PocketTTS: cloned teaching voice (Apple Neural Engine).
+# Requires the fluid-poc worker: swift build -c release (see README).
+# First model download is ~766MB, once.
+tts:
+  engine: pocket
+
+# Kokoro fallback: small local model, used for single-word reads if the
+# cloned voice is unavailable. Set engine: kokoro to make it primary.
+#tts:
+#  engine: kokoro
+#  voice: af_heart
+#  lang: en-us
+
+#data_dir: ~/.fluency-coach
+#host: 127.0.0.1
+#port: 8080
