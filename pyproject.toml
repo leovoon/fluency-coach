@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 fluency-coach = "coach.main:main"
 fluency-coach-ui = "coach.ui:main"
+coach = "coach.ctl:main"
 
 [build-system]
 requires = ["setuptools>=61"]
