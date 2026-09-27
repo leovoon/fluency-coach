@@ -255,6 +255,7 @@ def index(passage: str | None = None):
     current = {"i": 0}
     jump_guard = {"on": False}  # suppress on_jump while show_sentence syncs the select
     recording = {"on": False}
+    read_all = {"on": False}  # whole-passage playback running — nav/rec paused
     # Bumped on navigation. In-flight refreshes must not paint or delete after it moves.
     gen = {"n": 0}
     options = {
@@ -292,7 +293,7 @@ def index(passage: str | None = None):
                 status.set_text("")
 
     def on_jump(e) -> None:
-        if recording["on"] or jump_guard["on"] or e.value is None:
+        if recording["on"] or read_all["on"] or jump_guard["on"] or e.value is None:
             return
         current["i"] = e.value
         show_sentence()
@@ -335,6 +336,9 @@ def index(passage: str | None = None):
             unlink_ref_btn = ui.button("unlink reference", icon="link_off").props("flat dense")
             hear_user_btn = ui.button("hear your take", icon="graphic_eq").props("flat dense")
             hear_user_btn.disable()
+            read_all_btn = ui.button("read whole passage", icon="campaign").props("flat dense")
+            read_all_btn.tooltip("play from the sentence you're on to the end — "
+                                 "the view advances with each sentence")
             unlink_ref_btn.disable()
 
         with ui.row().classes("gap-x-4 flex-wrap items-center text-xs text-gray-400"):
@@ -492,7 +496,6 @@ def index(passage: str | None = None):
                                     ).classes("w-full")
         with ui.row().classes('gap-2'):
             load_btn = ui.button("load passage").props('flat dense')
-            read_all_btn = ui.button("read whole passage", icon="campaign").props('flat dense')
 
             async def _on_passage_file(e) -> None:
                 if recording["on"]:
@@ -845,7 +848,7 @@ def index(passage: str | None = None):
             _chunk_buttons(sentence)
 
     async def on_record_reference() -> None:
-        if recording["on"] or not sentences:
+        if recording["on"] or read_all["on"] or not sentences:
             return
         sentence = sentences[current["i"]]
         token = gen["n"]
@@ -1137,16 +1140,19 @@ def index(passage: str | None = None):
             Path(old_tmp).unlink(missing_ok=True)
 
     async def on_read_all() -> None:
-        import re
-        text = passage_input.value.strip()
-        parts = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-        if not parts:
-            ui.notify("nothing to read", type="warning")
+        """Play the passage starting at the sentence on screen, and walk the
+        view forward with each sentence played, stopping at the end."""
+        if recording["on"] or read_all["on"] or not sentences:
             return
+        read_all["on"] = True
+        set_nav(False)
         read_all_btn.disable()
         read_all_btn.props('loading')
         try:
-            for sentence in parts:
+            for i in range(current["i"], len(sentences)):
+                current["i"] = i
+                show_sentence()
+                sentence = sentences[i]
                 if reference.has(sentence):
                     status.set_text("playing your saved reference…")
                     await run.io_bound(record.play_wav, reference.path_for(sentence))
@@ -1160,12 +1166,14 @@ def index(passage: str | None = None):
                 else:
                     status.set_text("read-back is off")
                     return
-            status.set_text("")
+            status.set_text("passage finished")
         except Exception as e:
             ui.notify(f"read-back failed: {e}", type="negative")
         finally:
+            read_all["on"] = False
             read_all_btn.props(remove='loading')
             read_all_btn.enable()
+            set_nav(True)
 
     def show_sentence() -> None:
         if not sentences:
@@ -1225,7 +1233,7 @@ def index(passage: str | None = None):
         background_tasks.create(refresh_ref_arrows())
 
     async def on_record() -> None:
-        if recording["on"] or not sentences:
+        if recording["on"] or read_all["on"] or not sentences:
             if not sentences:
                 ui.notify("load a passage first", type="warning")
             return
@@ -1269,7 +1277,12 @@ def index(passage: str | None = None):
             user_energy, user_slopes = {}, {}
             if asr["words"] and options["melody"]:
                 status.set_text("scoring melody…")
-                wp = await run.io_bound(melody.word_pitch, wav, asr["words"])
+                # Pitch usually rides the ASR worker's response (keeps the
+                # numba/scipy DSP out of this process); local scoring is the
+                # fallback when the worker skipped it.
+                wp = asr.get("pitch")
+                if not wp:
+                    wp = await run.io_bound(melody.word_pitch, wav, asr["words"])
                 if stale(token):
                     Path(wav).unlink(missing_ok=True)
                     return
@@ -1426,13 +1439,13 @@ def index(passage: str | None = None):
             set_nav(True)
 
     def on_prev() -> None:
-        if recording["on"] or not sentences:
+        if recording["on"] or read_all["on"] or not sentences:
             return
         current["i"] = (current["i"] - 1) % len(sentences)
         show_sentence()
 
     def on_next() -> None:
-        if recording["on"] or not sentences:
+        if recording["on"] or read_all["on"] or not sentences:
             return
         current["i"] = (current["i"] + 1) % len(sentences)
         show_sentence()
@@ -1441,6 +1454,37 @@ def index(passage: str | None = None):
     stop_btn.on_click(lambda: record.stop_recording())
     prev_btn.on_click(on_prev)
     next_btn.on_click(on_next)
+
+    async def on_key(e) -> None:
+        """Keyboard: space = record/stop, ←/→ = previous/next sentence.
+        Ignored while typing in an input/textarea (ui.keyboard's ignore list)."""
+        if not e.action.keydown or e.modifiers.ctrl or e.modifiers.meta or e.modifiers.alt:
+            return
+        if e.key.space:
+            if recording["on"]:
+                record.stop_recording()
+            else:
+                await on_record()
+        elif e.key.arrow_left:
+            on_prev()
+        elif e.key.arrow_right:
+            on_next()
+
+    ui.keyboard(on_key=on_key, repeating=False)
+    # Space and the arrows would otherwise scroll the page — they are ours now.
+    ui.run_javascript("""
+window.addEventListener('keydown', (e) => {
+  const t = document.activeElement;
+  const tag = t ? t.tagName.toLowerCase() : '';
+  if (['input', 'select', 'textarea', 'button'].includes(tag) ||
+      (t && t.isContentEditable)) return;
+  if (!e.ctrlKey && !e.metaKey && !e.altKey &&
+      (e.code === 'Space' || e.code.startsWith('Arrow'))) e.preventDefault();
+});
+""")
+    record_btn.tooltip('space')
+    prev_btn.tooltip('arrow left')
+    next_btn.tooltip('arrow right')
     read_all_btn.on_click(on_read_all)
     ref_rec_btn.on_click(on_record_reference)
     hear_ref_btn.on_click(on_hear_reference)
