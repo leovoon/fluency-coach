@@ -73,7 +73,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     const text = await extractFromTab(tab.id);
     if (!text) throw new Error("no text found on this page");
-    await startSession(text);
+    const url = await startSession(text);
+    try {
+      // Same snapped-window flow as the popup: session beside the page.
+      await openBeside(url, tab.id);
+    } catch (err) {
+      console.error("[fluency coach] snapped window failed, opening tab instead:", err);
+      await chrome.tabs.create({ url });
+    }
   } catch (err) {
     console.error("[fluency coach]", err);
   }
