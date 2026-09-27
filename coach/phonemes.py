@@ -21,7 +21,6 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 
-import librosa
 import numpy as np
 
 MODEL_ID = "facebook/wav2vec2-lv-60-espeak-cv-ft"
@@ -155,6 +154,8 @@ def expected_phones(word: str) -> tuple[str, ...]:
 
 def _frame_logprobs(wav_path: str, proc, model, torch):
     """(logposteriors [T,V], blank_id, vocab_ids, inv) for 16k mono audio."""
+    import librosa  # heavy: numba/scipy load and JIT on first use
+
     audio, _ = librosa.load(wav_path, sr=16000, mono=True)
     inputs = proc(audio, sampling_rate=16000, return_tensors="pt")
     with torch.no_grad():

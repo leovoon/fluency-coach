@@ -8,41 +8,39 @@ read when no recording exists. Nothing here is the learner.
 
 from __future__ import annotations
 
-from contextlib import ExitStack
+import json
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 import os
 import platform
-import shutil
-import subprocess
-import tempfile
-import threading
 
 from .config import DEFAULT_ASR_ID as ASR_MODEL_ID
 from .config import load
 
-# The Photon handle is a context manager; entering it via an ExitStack kept at
-# module scope keeps it alive for reuse without leaking the with-block.
-# Model access is serialized: lru_cache is not thread-safe against concurrent
-# first loads, and the runtime crashes under concurrent use.
-_exit_stack = ExitStack()
+# ASR runs in a child process (python -m coach.asr_worker): torch and the
+# parakeet model stay out of this process entirely — their import floor alone
+# is ~300MB — and the worker exits after COACH_ASR_IDLE_S without a request,
+# so the heavy stack is resident only while practicing. Requests are
+# serialized on one worker: the Photon runtime crashes under concurrent use.
 _asr_lock = threading.RLock()
 _tts_lock = threading.RLock()
-_device_lock = threading.Lock()
-_forced_device: str | None = None
+_ASR_WORKER: dict = {"proc": None}
+_ASR_READY_MARKER = "ASR_WORKER_READY"
+_ASR_READY_WAIT_S = 900.0   # first run downloads ~178MB before the marker
+_ASR_CALL_WAIT_S = 180.0
 
 _TTS_OFF = "TTS off in this tier — record a reference or set tts.engine"
 
 
 def _settings():
     return load()
-
-
-def runtime_device() -> str:
-    """Configured device, or cpu if a previous load already failed over."""
-    if _forced_device:
-        return _forced_device
-    return _settings().device
 
 
 # Kokoro voices that ship with the standard 82M release, by accent/gender.
@@ -89,45 +87,83 @@ def current_voice() -> str:
     return _voice_override or _settings().tts_voice
 
 
-def _remember_cpu() -> None:
-    global _forced_device
-    with _device_lock:
-        _forced_device = "cpu"
+class _WorkerGone(Exception):
+    """The ASR worker died or hung — transport, not a transcription error."""
 
 
-def get_asr():
-    with _asr_lock:
-        return _load_asr()
+def _readline(proc, timeout_s: float):
+    """One stdout line: "" on EOF, None on timeout."""
+    ready, _, _ = select.select([proc.stdout], [], [], max(0.0, timeout_s))
+    if not ready:
+        return None
+    return proc.stdout.readline()
 
 
-@lru_cache(maxsize=1)
-def _load_asr():
-    settings = _settings()
-    if settings.asr_engine != "photon":
-        raise RuntimeError(
-            f"asr.engine {settings.asr_engine!r} is not available; "
-            "shipped engine is photon"
-        )
-    import moondream as md
-
-    device = runtime_device()
-    print(
-        f"  … loading parakeet ASR on {device} (first run downloads ~178MB)",
-        flush=True,
-    )
-    try:
-        return _exit_stack.enter_context(md.photon(settings.asr_id, device=device))
-    except Exception as first:
-        if device == "cpu":
-            raise
-        print(f"  … ASR device {device} failed ({first}); retrying on cpu", flush=True)
-        _remember_cpu()
+def _kill_asr_worker() -> None:
+    proc = _ASR_WORKER.get("proc")
+    if proc is not None and proc.poll() is None:
         try:
-            return _exit_stack.enter_context(md.photon(settings.asr_id, device="cpu"))
-        except Exception as second:
-            raise RuntimeError(
-                f"ASR failed on {device} and on cpu: {second}"
-            ) from second
+            proc.kill()
+        except Exception:
+            pass
+    _ASR_WORKER["proc"] = None
+
+
+def _asr_worker():
+    """The live worker, spawning one and waiting for its ready marker."""
+    proc = _ASR_WORKER.get("proc")
+    if proc is not None and proc.poll() is None:
+        return proc
+    _kill_asr_worker()
+    print("  … starting ASR worker (the inference runtime loads there, not here)",
+          flush=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "coach.asr_worker"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=None,  # inherited: model-load logs land in the server log
+        text=True,
+    )
+    _ASR_WORKER["proc"] = proc
+    deadline = time.monotonic() + _ASR_READY_WAIT_S
+    while time.monotonic() < deadline:
+        line = _readline(proc, deadline - time.monotonic())
+        if line is None or line == "":
+            break  # timed out, or the worker exited during startup
+        if _ASR_READY_MARKER in line:
+            return proc
+    code = proc.poll()
+    _kill_asr_worker()
+    raise _WorkerGone(f"ASR worker did not become ready (exit {code}) — see the log")
+
+
+def _worker_transcribe(proc, wav_path) -> dict:
+    """One request/response round-trip with the ASR worker."""
+    try:
+        proc.stdin.write(json.dumps({"wav": str(wav_path)}) + "\n")
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError) as e:
+        raise _WorkerGone(f"ASR worker pipe broke: {e}") from e
+    deadline = time.monotonic() + _ASR_CALL_WAIT_S
+    while time.monotonic() < deadline:
+        line = _readline(proc, deadline - time.monotonic())
+        if line is None:
+            raise _WorkerGone("ASR worker timed out — see the log")
+        if line == "":
+            raise _WorkerGone("ASR worker exited mid-request — see the log")
+        line = line.strip()
+        if not line.startswith("{"):
+            continue  # moondream/CoreML noise on stdout
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and "ok" in data:
+            if not data["ok"]:
+                raise RuntimeError(str(data.get("error") or "ASR failed"))
+            return {"text": str(data.get("text") or ""),
+                    "words": data.get("words"),
+                    "pitch": data.get("pitch")}
+    raise _WorkerGone("ASR worker timed out — see the log")
 
 
 def transcribe(wav_path) -> str:
@@ -135,38 +171,30 @@ def transcribe(wav_path) -> str:
 
 
 def transcribe_detailed(wav_path) -> dict:
-    """Transcribe an utterance.
+    """Transcribe an utterance via the ASR worker subprocess.
 
-    Returns {"text": str, "words": list | None}. "words" holds word-level
-    timestamps ([{"word", "start", "end"}, ...]) when available, for
-    pause/pacing scoring later; callers that only need text use transcribe().
+    Returns {"text": str, "words": list | None, "pitch": list | None}.
+    "words" holds word-level timestamps ([{"word", "start", "end"}, ...])
+    when available, for pause/pacing scoring later; callers that only need
+    text use transcribe(). "pitch" carries melody.word_pitch output when the
+    worker scored it (tier melody on) — callers fall back to scoring locally
+    when it is None. A transport failure (worker died or hung) is retried
+    once on a fresh worker; a transcription error from the worker is raised
+    as-is.
     """
-    speech = get_asr()
     if not Path(str(wav_path)).exists():
         raise RuntimeError(f"no audio at {wav_path}")
-    # Loud reads clip near full scale, and kestrel's resampler overshoots
-    # >1.0 on those peaks — sanitize every file at the ASR door.
-    import numpy as np
-    import soundfile as sf
-    data, sr = sf.read(str(wav_path), dtype="float32")
-    peak = float(np.abs(data).max()) if data.size else 0.0
-    if peak > 0.95:
-        fd, tmp = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
-        try:
-            sf.write(tmp, data / peak * 0.95, sr, subtype="PCM_16")
-            wav_path = tmp
-        except Exception:
-            Path(tmp).unlink(missing_ok=True)
     with _asr_lock:
-        result = speech.transcribe(audio=str(wav_path), timestamps="word")
-        if peak > 0.95:
-            Path(str(wav_path)).unlink(missing_ok=True)
-    words = None
-    for seg in result.get("segments") or []:
-        if seg.get("words"):
-            words = (words or []) + seg["words"]
-    return {"text": result["text"].strip(), "words": words}
+        for attempt in (1, 2):
+            try:
+                return _worker_transcribe(_asr_worker(), wav_path)
+            except _WorkerGone:
+                _kill_asr_worker()
+                if attempt == 2:
+                    raise RuntimeError(
+                        "ASR worker unavailable — try again in a moment"
+                    ) from None
+                continue
 
 
 @lru_cache(maxsize=1)
@@ -509,7 +537,31 @@ def _synthesize_chatterbox(text: str) -> Path:
 # ~0.5s warm with a ~1s model load — no persistent model residency penalty.
 # Sentence reads AND word clicks prefer it; NeuTTS (rust → python) stays as
 # the fallback chain.
-_FLUID_WORKER: dict = {"proc": None, "ref": None}
+_FLUID_WORKER: dict = {"proc": None, "ref": None, "last_use": 0.0,
+                        "timer": None}
+
+# The worker retires after this long without a render — PocketTTS reloads in
+# ~1s, so idle RAM goes back instead of holding ~380MB between sessions.
+_FLUID_IDLE_S = float(os.environ.get("COACH_FLUID_IDLE_S", "600"))
+
+
+def _touch_fluid_worker() -> None:
+    """(Re)arm the idle timer that retires the fluid worker."""
+    _FLUID_WORKER["last_use"] = time.monotonic()
+    timer = _FLUID_WORKER.get("timer")
+    if timer is not None:
+        timer.cancel()
+    timer = threading.Timer(_FLUID_IDLE_S, _retire_fluid_worker)
+    timer.daemon = True
+    timer.start()
+    _FLUID_WORKER["timer"] = timer
+
+
+def _retire_fluid_worker() -> None:
+    """Idle the PocketTTS worker out; the next render respawns it (~1s)."""
+    if time.monotonic() - _FLUID_WORKER.get("last_use", 0.0) < _FLUID_IDLE_S:
+        return  # used again since this timer was armed
+    _kill_fluid_worker()
 
 
 def _fluid_worker_path() -> Path | None:
@@ -523,6 +575,7 @@ def _fluid_worker():
     ref, _ = _teaching_reference()
     if (proc is not None and proc.poll() is None
             and _FLUID_WORKER.get("ref") == str(ref)):
+        _touch_fluid_worker()
         return proc
     if proc is not None:
         try:
@@ -553,10 +606,15 @@ def _fluid_worker():
         return None
     _FLUID_WORKER["proc"] = proc
     _FLUID_WORKER["ref"] = str(ref)
+    _touch_fluid_worker()
     return proc
 
 
 def _kill_fluid_worker() -> None:
+    timer = _FLUID_WORKER.get("timer")
+    if timer is not None:
+        timer.cancel()
+        _FLUID_WORKER["timer"] = None
     proc = _FLUID_WORKER.get("proc")
     if proc is not None and proc.poll() is None:
         try:

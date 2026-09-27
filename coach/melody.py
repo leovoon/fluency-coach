@@ -14,8 +14,6 @@ from __future__ import annotations
 import numpy as np
 import soundfile as sf
 
-import librosa
-
 from . import rhythm
 
 UP, DOWN, FLAT, NONE = "up", "down", "flat", "none"
@@ -111,6 +109,8 @@ def word_pitch(wav_path, words: list[dict]) -> list[dict]:
     The two lines on the chart each use their own median. +12 on the reference
     and -8 on you are not "the reference is higher in Hz." Compare the shape.
     """
+    import librosa  # heavy: numba/scipy load and JIT on first pyin call
+
     audio, sr = sf.read(wav_path, dtype="float32")
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
@@ -228,7 +228,7 @@ def reference_arrows(sentence: str, ref_wav=None, origin: str = "engine") -> dic
             return {"arrows": {}, "st": {}, "ts": {}, "slopes": {}, "energy": {},
                     "source": source}
         alignment = diffmod.align(sentence, asr["text"])
-        wp = word_pitch(wav, asr["words"])
+        wp = asr.get("pitch") or word_pitch(wav, asr["words"])
         arrows, st, ts, slopes, energy = {}, {}, {}, {}, {}
         for w in alignment.words:
             if w.spoken_j is not None and w.spoken_j < len(wp):

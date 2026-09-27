@@ -31,6 +31,22 @@ cp coach.yaml.example coach.yaml   # defaults are fine; tts.engine: pocket
 .venv/bin/python -m coach.ui       # http://127.0.0.1:8080
 ```
 
+### Start / stop without a terminal
+
+If the package is installed in the venv (`.venv/bin/pip install -e .`), a
+`coach` command manages the UI server as a background process:
+
+```sh
+.venv/bin/coach start --tier pro   # any coach.ui flag passes through
+.venv/bin/coach status
+.venv/bin/coach logs -f            # tail the server log
+.venv/bin/coach stop               # clean stop; the TTS worker dies with it
+```
+
+The pid lives at `~/.fluency-coach/server.pid` and the log at
+`~/.fluency-coach/server.log` (both follow `FLUENCY_DATA`). Without the
+install, `python -m coach.ctl …` works the same from the project root.
+
 macOS (Apple Silicon) is the supported platform — PocketTTS runs on the
 Apple Neural Engine through CoreML. First runs download models: ~178MB for
 ASR, ~766MB for the TTS English pack, once each.
@@ -46,6 +62,28 @@ cd fluid-poc && swift build -c release
 
 The UI spawns and manages this worker automatically (`fluidpoc --worker`).
 No HF token is required for the TTS models.
+
+### ASR worker
+
+ASR runs out-of-process: `coach.models` spawns `python -m coach.asr_worker`
+on first transcribe and talks JSON lines over stdin/stdout. The worker exits
+by itself after 10 minutes without a request (`COACH_ASR_IDLE_S` to change),
+and the client respawns on the next read.
+
+Two engines, chosen by `asr.engine` in `coach.yaml`:
+
+- **`parakeet-cpp`** (default) — whisper.cpp's `parakeet-cli` (ggml, Metal,
+  q4_0). Torch-free: ~420MB peak, ~0.15s compute, ~0.8s per read including
+  process spawn. Word timestamps come from the TDT token dump. Install:
+  build whisper.cpp (`cmake -B build -DGGML_METAL=ON && cmake --build
+  build --target parakeet-cli`), copy `parakeet-cli` to
+  `~/.fluency-coach/bin/` and the build's `*.dylib` to `~/.fluency-coach/lib/`
+  (add rpath `@executable_path/../lib` via `install_name_tool`), and download
+  `ggml-parakeet-tdt-0.6b-v3-q4_0.bin` from `ggml-org/parakeet-GGUF` into
+  `~/.fluency-coach/models/`.
+- **`photon`** — moondream Photon (kestrel/torch, MPS), ~650MB peak, ~1.2s
+  per read. The reference implementation; also the only engine that runs the
+  ternary-quantized parakeet-redux weights.
 
 ### Progress history
 
@@ -123,6 +161,7 @@ Everything lives in `~/.fluency-coach/` (override with `data_dir` or
 
 ```
 coach/            NiceGUI app, ASR/TTS bridges, scoring (melody, flow, stress)
+coach/asr_worker.py  ASR subprocess: torch-free parakeet-cpp / photon engines
 coach/extension/  unpacked Chrome extension (raw JS, no build step)
 fluid-poc/        Swift worker: PocketTTS cloning on the ANE
 coach.yaml.example

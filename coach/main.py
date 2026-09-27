@@ -126,7 +126,7 @@ def run_sentence(sentence: str, use_jev: bool, use_tts: bool, use_phonemes: bool
         if use_melody and asr["words"]:
             try:
                 t1 = time.time()
-                wp = melody.word_pitch(wav, asr["words"])
+                wp = asr.get("pitch") or melody.word_pitch(wav, asr["words"])
                 mel_ms = (time.time() - t1) * 1000
                 arrows = melody.render(wp, paint=lambda d, a: f"{DIM}{a}{RESET}")
                 print(f"  {DIM}melody ({mel_ms:.0f}ms):{RESET} {arrows}")

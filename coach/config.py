@@ -76,6 +76,8 @@ class Settings:
     device: str
     asr_engine: str
     asr_id: str
+    asr_model: str
+    asr_binary: str
     tts_engine: str
     tts_voice: str
     tts_lang: str
@@ -161,6 +163,8 @@ def _defaults() -> dict:
         "device_pref": "auto",
         "asr_engine": "photon",
         "asr_id": DEFAULT_ASR_ID,
+        "asr_model": "",
+        "asr_binary": "",
         "tts_engine": "kokoro",
         "tts_voice": DEFAULT_TTS_VOICE,
         "tts_lang": DEFAULT_TTS_LANG,
@@ -206,10 +210,18 @@ def _apply_yaml(fields: dict, raw: dict, identity_only: bool = False) -> None:
             fields["asr_engine"] = str(asr["engine"]).strip().lower()
         if "id" in asr:
             fields["asr_id"] = str(asr["id"]).strip()
+        if "model" in asr:
+            fields["asr_model"] = str(asr["model"]).strip()
+        if "binary" in asr:
+            fields["asr_binary"] = str(asr["binary"]).strip()
     if "asr_id" in raw:
         fields["asr_id"] = str(raw["asr_id"]).strip()
     if "asr_engine" in raw:
         fields["asr_engine"] = str(raw["asr_engine"]).strip().lower()
+    if "asr_model" in raw:
+        fields["asr_model"] = str(raw["asr_model"]).strip()
+    if "asr_binary" in raw:
+        fields["asr_binary"] = str(raw["asr_binary"]).strip()
     tts = raw.get("tts")
     if isinstance(tts, dict):
         if "engine" in tts and not identity_only:
@@ -304,6 +316,8 @@ def _build(fields: dict) -> Settings:
         device=resolve_device(fields["device_pref"]),
         asr_engine=fields["asr_engine"],
         asr_id=str(fields["asr_id"]).strip(),
+        asr_model=str(fields["asr_model"]).strip(),
+        asr_binary=str(fields["asr_binary"]).strip(),
         tts_engine=engine,
         tts_voice=str(fields["tts_voice"]).strip() or DEFAULT_TTS_VOICE,
         tts_lang=str(fields["tts_lang"]).strip() or DEFAULT_TTS_LANG,

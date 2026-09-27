@@ -13,3 +13,9 @@ fluid-poc/.build/
 # A/B harness output
 ab_out/
 *.log
+# agent/harness local state
+.graff/
+.harness/
+default.profraw
+*.profraw
+fluency_coach.egg-info/

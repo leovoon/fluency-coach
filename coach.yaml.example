@@ -5,7 +5,11 @@
 # device: auto | cpu | mps | cuda
 
 #asr:
-#  engine: photon
+#  engine: parakeet-cpp   # whisper.cpp parakeet (ggml/Metal, torch-free)
+#  model: ~/.fluency-coach/models/parakeet-tdt-0.6b-v3-q4_0.bin
+#  binary: ~/.fluency-coach/bin/parakeet-cli
+#asr:
+#  engine: photon         # moondream Photon (kestrel/torch) reference path
 #  id: moondream/parakeet-redux
 
 # PocketTTS: cloned teaching voice (Apple Neural Engine).
