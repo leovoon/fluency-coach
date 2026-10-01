@@ -243,6 +243,14 @@ def colored_passage(sentence: str, alignment: diffmod.Alignment | None,
 
 
 @ui.page("/")
+def shadowing_room(passage: str | None = None, preview: bool = False,
+                   theme: str = "paper"):
+    from .room import build
+    build(_settings(), _extension_passages.get(passage) if passage else None,
+          _template_passages(), preview=preview, theme=theme)
+
+
+@ui.page("/classic")
 def index(passage: str | None = None):
     settings = _settings()
     read_label = models.model_read_label()

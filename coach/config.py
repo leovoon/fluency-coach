@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_ASR_ID = "moondream/parakeet-redux"
+DEFAULT_ASR_ID = "FermionResearch/Phonon-2"
 DEFAULT_TTS_VOICE = "af_heart"
 DEFAULT_TTS_LANG = "en-us"
 DEFAULT_HOST = "127.0.0.1"
@@ -39,8 +39,8 @@ _PRESETS: dict[str, dict] = {
         "tts_engine": "none",
     },
     "standard": {
-        "melody": True,
-        "flow": True,
+        "melody": False,
+        "flow": False,
         "phonemes": False,
         "jev": False,
         "tts": True,
@@ -48,8 +48,8 @@ _PRESETS: dict[str, dict] = {
         "tts_engine": "kokoro",
     },
     "pro": {
-        "melody": True,
-        "flow": True,
+        "melody": False,
+        "flow": False,
         "phonemes": True,
         "jev": True,
         "tts": True,
@@ -148,6 +148,11 @@ def load(argv: list[str] | None = None) -> Settings:
         _apply_yaml(fields, raw, identity_only=True)
     fields["tier"] = tier
     _apply_cli(fields, flags)
+    # Preserve the alternative engine's established model when only its engine is set.
+    asr = raw.get("asr") or {}
+    if (fields["asr_engine"] == "photon" and "asr_id" not in raw
+            and not (isinstance(asr, dict) and "id" in asr)):
+        fields["asr_id"] = "moondream/parakeet-redux"
     return _build(fields)
 
 
@@ -161,7 +166,7 @@ def _defaults() -> dict:
     return {
         "tier": "standard",
         "device_pref": "auto",
-        "asr_engine": "photon",
+        "asr_engine": "phonon",
         "asr_id": DEFAULT_ASR_ID,
         "asr_model": "",
         "asr_binary": "",
@@ -173,8 +178,8 @@ def _defaults() -> dict:
         "jev_api": "",
         "jev_model": "",
         "jev_api_key": "",
-        "melody": True,
-        "flow": True,
+        "melody": False,
+        "flow": False,
         "phonemes": False,
         "jev": False,
         "tts": True,

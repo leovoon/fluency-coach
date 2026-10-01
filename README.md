@@ -1,24 +1,44 @@
 # fluency-coach
 
-Read a passage aloud. See where the words, the tune, and the joins drifted.
-The voice to copy is a recording you saved — yours, a teacher, a native speaker.
-That file always wins.
+Listen to a teaching voice, read one sentence aloud, then hear the two together.
+The shadowing room has warm paper and candlelit themes, with no grades or scores.
+A saved human reference always takes precedence over a synthesized model read.
 
-![demo](demo.gif)
+The main screen is at `/`. `/?preview=true` shows the labeled sample design
+with two skipped words and one substitution; `&theme=candlelit` selects the dark
+variant. The former diagnostic screen remains available at `/classic`.
+
+![shadowing partner](assets/preview.png)
 
 ## How it works
 
-- **ASR** — `moondream/parakeet-redux` (Photon) listens to your recording and
-  writes down exactly what you said.
+- **ASR** — Fermion's Phonon-2 (164 MB, MLX) listens to your recording and
+  writes down exactly what you said. Also available: whisper.cpp's
+  parakeet-cli (ggml/Metal, with word timestamps) and moondream's parakeet-
+  redux (Photon). Note: only the parakeet engines give word timestamps, so
+  the melody and flow features need one of them; Phonon-2 drives the diff
+  alone. The shadowing room does not run the timestamp-dependent scoring layers.
 - **Model read** — [PocketTTS](https://github.com/kyutai-labs/pocket-tts) via
   [FluidAudio](https://github.com/orukeet/FluidAudio) renders the sentence in a
   **cloned teaching voice** on the Apple Neural Engine. The model read is
   always labeled as such — it is not a native speaker and not "the correct"
   pronunciation.
-- **Word clicks** — single words are spoken in the same cloned voice, with a
-  small local Kokoro model as fallback.
-- **Feedback** — a word-by-word diff drives the melody, flow, and stress marks
-  on screen.
+- **A/B listening:** play hears the model/reference first, then your latest take.
+  Click either reading's label to hear it separately. Again clears the current
+  take without advancing the sentence. P plays the pair; Space starts or stops
+  recording. Shortcuts are ignored while typing in setup fields.
+- **Feedback:** recognized words appear in muted slate-teal. Skipped words stay
+  ghosted in their original position; substitutions have a dotted underline.
+  Focus or hover on a changed word for its description. Arrows and flow are off.
+- **Timing:** both readings highlight progressively during playback using
+  approximate duration-based timing, not ASR word alignment. Learner words fill
+  slate-teal at estimated word onsets, including substitutions and insertions;
+  skipped words stay ghosted. Learner timing excludes detected leading/trailing
+  silence without trimming the recording. Silence detection is approximate;
+  if no speech span is detected, timing falls back to the full duration.
+  The ribbon is measured from the model/reference audio after play. The thin
+  waveform pulses during recording and stops before transcription. It indicates
+  capture activity, not microphone volume, and respects reduced-motion settings.
 
 If a sentence has no saved reference, the app may play a model read and labels
 it that way. It never calls that file your reference.
@@ -49,7 +69,8 @@ install, `python -m coach.ctl …` works the same from the project root.
 
 macOS (Apple Silicon) is the supported platform — PocketTTS runs on the
 Apple Neural Engine through CoreML. First runs download models: ~178MB for
-ASR, ~766MB for the TTS English pack, once each.
+the alternative Parakeet ASR (164 MB for default Phonon-2), ~766MB for the
+TTS English pack, once each.
 
 ### Building the voice worker
 
@@ -70,9 +91,14 @@ on first transcribe and talks JSON lines over stdin/stdout. The worker exits
 by itself after 10 minutes without a request (`COACH_ASR_IDLE_S` to change),
 and the client respawns on the next read.
 
-Two engines, chosen by `asr.engine` in `coach.yaml`:
+Three engines, chosen by `asr.engine` in `coach.yaml`:
 
-- **`parakeet-cpp`** (default) — whisper.cpp's `parakeet-cli` (ggml, Metal,
+- **`phonon`** (default): [Phonon-2](https://huggingface.co/FermionResearch/Phonon-2)
+  through Fermion's MLX runtime. The 164 MB model downloads on first use.
+  The adapter returns text with `words: null`; it does not invent timestamps.
+  `fermion-research==0.2.3` is pinned because this adapter uses its internal API.
+  Requirements include the Apple Silicon MLX dependencies.
+- **`parakeet-cpp`** — whisper.cpp's `parakeet-cli` (ggml, Metal,
   q4_0). Torch-free: ~420MB peak, ~0.15s compute, ~0.8s per read including
   process spawn. Word timestamps come from the TDT token dump. Install:
   build whisper.cpp (`cmake -B build -DGGML_METAL=ON && cmake --build
@@ -87,7 +113,9 @@ Two engines, chosen by `asr.engine` in `coach.yaml`:
 
 ### Progress history
 
-Every scored attempt appends one row to `~/.fluency-coach/history.jsonl` —
+The shadowing room does not collect scores or show a history dashboard.
+The optional `/classic` screen retains the original history behavior:
+every scored attempt appends one row to `~/.fluency-coach/history.jsonl` —
 WER, flattened beats, missed breaths, choppy links, hesitations. A small
 line under the mark legends compares this week's medians to last week's.
 There are no ratings and no self-judgment: only counts the scoring pass
@@ -166,6 +194,17 @@ coach/extension/  unpacked Chrome extension (raw JS, no build step)
 fluid-poc/        Swift worker: PocketTTS cloning on the ANE
 coach.yaml.example
 ```
+
+## Tests
+
+```sh
+.venv/bin/python -m pip install -e '.[test]'
+.venv/bin/python -m pytest -q
+```
+
+The suite covers transcript presentation, engine defaults, text-only ASR,
+A/B ordering and cancellation, and NiceGUI recording/playback/error states.
+UI tests use controlled audio fixtures; a real microphone check is separate.
 
 ## History
 

@@ -4,7 +4,7 @@
 Loop per sentence:
   1. show the sentence
   2. press Enter, read aloud; capture stops on trailing silence
-  3. parakeet-redux (moondream Photon, local) transcribes
+  3. the ASR engine from coach.yaml transcribes (phonon-2 / parakeet)
   4. local word-diff highlights match / sub / skip instantly
   5. melody arrows show where your voice rose/fell per word
   6. one batched Jev call (Experiential Labs) judges suspect words + sentence

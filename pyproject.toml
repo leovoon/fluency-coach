@@ -1,6 +1,6 @@
 [project]
 name = "fluency-coach"
-version = "0.1.0"
+version = "0.5.0"
 description = "Local fluency coach. Your recorded voice is the reference; STT and TTS are swappable."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,12 +16,32 @@ dependencies = [
     "torch",
     "transformers",
     "phonemizer",
+    "fermion-research==0.2.3",
+    "mlx; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-audio; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "zstandard",
 ]
 
 [project.scripts]
 fluency-coach = "coach.main:main"
 fluency-coach-ui = "coach.ui:main"
 coach = "coach.ctl:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+main_file = ""
+testpaths = ["tests"]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio"]
+phonon = [
+    "fermion-research==0.2.3",
+    "mlx; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-audio; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "zstandard",
+]
 
 [build-system]
 requires = ["setuptools>=61"]

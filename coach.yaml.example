@@ -4,6 +4,13 @@
 # tier: lite for weak CPUs (no melody, flow, phonemes, jev, or TTS).
 # device: auto | cpu | mps | cuda
 
+asr:
+  engine: phonon
+  id: FermionResearch/Phonon-2
+
+melody: false
+flow: false
+
 #asr:
 #  engine: parakeet-cpp   # whisper.cpp parakeet (ggml/Metal, torch-free)
 #  model: ~/.fluency-coach/models/parakeet-tdt-0.6b-v3-q4_0.bin

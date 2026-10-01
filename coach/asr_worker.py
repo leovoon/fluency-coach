@@ -14,6 +14,12 @@ engines (asr.engine in coach.yaml):
     ~/.fluency-coach/models/ (or asr.model).
   photon        moondream Photon (kestrel/torch, MPS). ~650MB peak, ~1.2s
     per read; the fallback reference implementation.
+  phonon        Fermion Phonon-2 (fermion-research, MLX). 164MB download,
+    ~0.3s decode for a sentence read, text only: the fermion runtime does
+    not expose token or word timings, so "words" is None and the UI's
+    melody/flow features skip (the diff still works off the text). Model
+    comes from asr.id (default FermionResearch/Phonon-2); first use
+    downloads and unpacks it via the fermion cache.
 
 protocol (one JSON object per line):
   request : {"wav": "/abs/path.wav"}
@@ -65,7 +71,71 @@ _TOKEN_RE = re.compile(
 
 _exit_stack = ExitStack()
 _cpp: dict = {"binary": None, "model": None}
+_phonon: list = []  # [loaded SpeechModel]
 _pitch_on: bool = False  # tier wants melody; pitch then rides the response
+
+
+def _load_phonon(settings):
+    """Load the Fermion speech model named by asr.id (default Phonon-2).
+
+    The pip package ships its own MLX runtime and model cache; a bare
+    `pip install fermion-research` is enough only on paper — the Apple
+    silicon engine also needs mlx/mlx-audio/mlx-lm/zstandard.
+    """
+    if _phonon:
+        return _phonon[0]
+    try:
+        from fermion._catalog import entry_for, resolve_alias, SPEECH_PROFILES
+        from fermion._speech import backends, fetch
+    except ImportError as e:
+        raise RuntimeError(
+            "phonon engine needs the fermion package: "
+            "pip install fermion-research mlx mlx-audio mlx-lm zstandard"
+        ) from e
+
+    def _resolve(spec):
+        try:
+            repo = resolve_alias(spec)
+            entry = entry_for(repo)
+            if entry is not None and entry.get("kind") == "speech":
+                return repo, entry
+        except Exception:
+            pass
+        return None, None
+
+    # asr.id still holds the parakeet/photon id by default — resolve_alias
+    # passes unknown ids through, so fall back to Phonon-2 rather than
+    # erroring on a stale config line.
+    repo, entry = _resolve(settings.asr_id)
+    spec = settings.asr_id
+    if entry is None:
+        spec = "FermionResearch/Phonon-2"
+        repo, entry = _resolve(spec)
+    if entry is None:
+        raise RuntimeError(
+            f"asr.id {settings.asr_id!r} is not a Fermion speech model — "
+            "phonon engine wants e.g. FermionResearch/Phonon-2"
+        )
+    key = entry["profile"]
+    pin = SPEECH_PROFILES[key]
+    print(
+        f"  … loading Phonon ASR ({spec}) via MLX "
+        "(first run downloads ~164MB)",
+        file=sys.stderr, flush=True,
+    )
+    engine_kind = backends.resolve("coach ASR")
+    model_dir = fetch.ensure(repo, key, pin)
+    speech = backends.load(engine_kind, model_dir, profile=key,
+                           backend=pin["backend"], quiet=True)
+    _phonon.append(speech)
+    # Pay the Metal shader compile on a throwaway decode so the first real
+    # read doesn't stall ~20s (the fermion live path does the same).
+    import numpy as np
+    try:
+        speech.transcribe_array_detailed(np.zeros(16000, dtype=np.float32))
+    except Exception as e:
+        print(f"  … phonon warmup skipped ({e})", file=sys.stderr, flush=True)
+    return speech
 
 
 def _load():
@@ -79,10 +149,13 @@ def _load():
         _cpp_binary(settings)  # fail fast, before the ready marker
         _cpp_model(settings)
         return "parakeet-cpp"
+    if settings.asr_engine == "phonon":
+        _load_phonon(settings)  # fail fast, before the ready marker
+        return "phonon"
     if settings.asr_engine != "photon":
         raise RuntimeError(
             f"asr.engine {settings.asr_engine!r} is not available; "
-            "shipped engines are parakeet-cpp and photon"
+            "shipped engines are parakeet-cpp, phonon, and photon"
         )
     import moondream as md
 
@@ -203,10 +276,23 @@ def _transcribe_photon(speech, wav_path: str) -> dict:
     return {"text": result["text"].strip(), "words": words}
 
 
+def _transcribe_phonon(speech, wav_path: str) -> dict:
+    """One fermion decode. Text only — no word timestamps exist on this
+    path (the runtime returns text and segment windows, not token times)."""
+    result = speech.transcribe_detailed(wav_path)
+    text, _decode_s, _dur_s = result.triple()
+    if getattr(result, "truncated", False):
+        print("  … phonon: decode hit its token budget; part of the audio "
+              "may be missing from the transcript", file=sys.stderr, flush=True)
+    return {"text": text, "words": None}
+
+
 def _transcribe(engine, wav_path: str) -> dict:
     if engine == "parakeet-cpp":
         from .config import load
         return _transcribe_cpp(load(), wav_path)
+    if engine == "phonon":
+        return _transcribe_phonon(_phonon[0], wav_path)
     return _transcribe_photon(engine, wav_path)
 
 
