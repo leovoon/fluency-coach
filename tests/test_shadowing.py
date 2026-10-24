@@ -110,7 +110,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_phonon_and_no_arrow_flow(self, _read):
         settings = config.load([])
         self.assertEqual(settings.asr_engine, 'phonon')
-        self.assertEqual(settings.asr_id, 'FermionResearch/Phonon-2')
+        self.assertEqual(settings.asr_id, 'FermionResearch/Phonon-2.5')
         self.assertFalse(settings.melody)
         self.assertFalse(settings.flow)
 
@@ -124,9 +124,10 @@ class ConfigTests(unittest.TestCase):
 
 
 class PhononTests(unittest.TestCase):
-    def test_text_only_does_not_request_pitch(self):
+    def test_no_timings_does_not_request_pitch(self):
         class Result:
             truncated = False
+            words = []
             def triple(self):
                 return 'Hello there.', .1, 1
         class Speech:
@@ -139,6 +140,29 @@ class PhononTests(unittest.TestCase):
         self.assertEqual(speech.path, 'read.wav')
         with patch('coach.asr_worker._pitch_on', True):
             self.assertIs(_with_pitch(result, 'missing.wav'), result)
+
+    def test_word_timestamps_mapped(self):
+        class Result:
+            truncated = False
+            words = [
+                {'text': 'Hello', 'start': .1, 'end': .3},
+                {'text': 'there.', 'start': .35, 'end': .6},
+            ]
+            def triple(self):
+                return 'Hello there.', .1, 1
+        class Speech:
+            def transcribe_detailed(self, path):
+                self.path = path
+                return Result()
+        speech = Speech()
+        result = _transcribe_phonon(speech, 'read.wav')
+        self.assertEqual(result, {
+            'text': 'Hello there.',
+            'words': [
+                {'word': 'Hello', 'start': .1, 'end': .3},
+                {'word': 'there.', 'start': .35, 'end': .6},
+            ],
+        })
 
 
 class PlaybackTests(unittest.IsolatedAsyncioTestCase):

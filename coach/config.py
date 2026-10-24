@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_ASR_ID = "FermionResearch/Phonon-2"
+DEFAULT_ASR_ID = "FermionResearch/Phonon-2.5"
 DEFAULT_TTS_VOICE = "af_heart"
 DEFAULT_TTS_LANG = "en-us"
 DEFAULT_HOST = "127.0.0.1"

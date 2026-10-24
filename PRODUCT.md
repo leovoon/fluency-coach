@@ -24,7 +24,7 @@ The existing NiceGUI app runs locally. Recording and playback use the server mac
 
 ## Capabilities and constraints
 
-Phonon-2 supplies text-only ASR. It does not supply word timestamps through the current adapter. Model karaoke timing is approximate. Saved human references take precedence over synthesized speech. PocketTTS clones a selected teaching voice; labels must distinguish cloned models from human references and other synthetic voices.
+Phonon-2.5 supplies ASR with word timestamps, enabling word-level melody and flow scoring. Model karaoke timing is approximate. Saved human references take precedence over synthesized speech. PocketTTS clones a selected teaching voice; labels must distinguish cloned models from human references and other synthetic voices.
 
 Voice management, saved references, and passage import must survive the redesign. Practice feedback excludes melody arrows, flow marks, scores, and grades. A/B playback compares complete recordings.
 

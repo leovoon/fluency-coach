@@ -9,8 +9,8 @@ httpx
 torch
 transformers
 phonemizer
-# Phonon-2 ASR on the supported Apple Silicon platform.
-fermion-research==0.2.3
+# Phonon-2.5 ASR on the supported Apple Silicon platform.
+fermion-research==0.2.14
 mlx; sys_platform == "darwin" and platform_machine == "arm64"
 mlx-audio; sys_platform == "darwin" and platform_machine == "arm64"
 mlx-lm; sys_platform == "darwin" and platform_machine == "arm64"

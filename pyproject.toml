@@ -16,7 +16,7 @@ dependencies = [
     "torch",
     "transformers",
     "phonemizer",
-    "fermion-research==0.2.3",
+    "fermion-research==0.2.14",
     "mlx; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-audio; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'",
@@ -36,7 +36,7 @@ testpaths = ["tests"]
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio"]
 phonon = [
-    "fermion-research==0.2.3",
+    "fermion-research==0.2.14",
     "mlx; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-audio; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'",

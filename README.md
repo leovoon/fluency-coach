@@ -12,12 +12,12 @@ variant. The former diagnostic screen remains available at `/classic`.
 
 ## How it works
 
-- **ASR** — Fermion's Phonon-2 (164 MB, MLX) listens to your recording and
-  writes down exactly what you said. Also available: whisper.cpp's
-  parakeet-cli (ggml/Metal, with word timestamps) and moondream's parakeet-
-  redux (Photon). Note: only the parakeet engines give word timestamps, so
-  the melody and flow features need one of them; Phonon-2 drives the diff
-  alone. The shadowing room does not run the timestamp-dependent scoring layers.
+- **ASR** — Fermion's Phonon-2.5 (156 MB, MLX) listens to your recording and
+  writes down exactly what you said, with word timestamps. Also available:
+  whisper.cpp's parakeet-cli (ggml/Metal) and moondream's parakeet-redux
+  (Photon). Melody and flow scoring work under Phonon-2.5; the older
+  Phonon-2 path was text-only, which is why it drove the diff alone. The
+  shadowing room does not run the timestamp-dependent scoring layers.
 - **Model read** — [PocketTTS](https://github.com/kyutai-labs/pocket-tts) via
   [FluidAudio](https://github.com/orukeet/FluidAudio) renders the sentence in a
   **cloned teaching voice** on the Apple Neural Engine. The model read is
@@ -69,7 +69,7 @@ install, `python -m coach.ctl …` works the same from the project root.
 
 macOS (Apple Silicon) is the supported platform — PocketTTS runs on the
 Apple Neural Engine through CoreML. First runs download models: ~178MB for
-the alternative Parakeet ASR (164 MB for default Phonon-2), ~766MB for the
+the alternative Parakeet ASR (156 MB for default Phonon-2.5), ~766MB for the
 TTS English pack, once each.
 
 ### Building the voice worker
@@ -93,10 +93,11 @@ and the client respawns on the next read.
 
 Three engines, chosen by `asr.engine` in `coach.yaml`:
 
-- **`phonon`** (default): [Phonon-2](https://huggingface.co/FermionResearch/Phonon-2)
-  through Fermion's MLX runtime. The 164 MB model downloads on first use.
-  The adapter returns text with `words: null`; it does not invent timestamps.
-  `fermion-research==0.2.3` is pinned because this adapter uses its internal API.
+- **`phonon`** (default): [Phonon-2.5](https://huggingface.co/FermionResearch/Phonon-2.5)
+  through Fermion's MLX runtime. The 156 MB model downloads on first use.
+  The adapter returns text plus word timestamps (`words` is the `{word,
+  start, end}` list), so melody/flow scoring work under this engine too.
+  `fermion-research==0.2.14` is pinned because this adapter uses its internal API.
   Requirements include the Apple Silicon MLX dependencies.
 - **`parakeet-cpp`** — whisper.cpp's `parakeet-cli` (ggml, Metal,
   q4_0). Torch-free: ~420MB peak, ~0.15s compute, ~0.8s per read including

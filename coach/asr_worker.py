@@ -14,11 +14,10 @@ engines (asr.engine in coach.yaml):
     ~/.fluency-coach/models/ (or asr.model).
   photon        moondream Photon (kestrel/torch, MPS). ~650MB peak, ~1.2s
     per read; the fallback reference implementation.
-  phonon        Fermion Phonon-2 (fermion-research, MLX). 164MB download,
-    ~0.3s decode for a sentence read, text only: the fermion runtime does
-    not expose token or word timings, so "words" is None and the UI's
-    melody/flow features skip (the diff still works off the text). Model
-    comes from asr.id (default FermionResearch/Phonon-2); first use
+  phonon        Fermion Phonon-2.5 (fermion-research, MLX). 156MB download,
+    ~0.3s decode for a sentence read, word timestamps included (the newer
+    fermion runtimes expose them), so melody/flow work here too. Model
+    comes from asr.id (default FermionResearch/Phonon-2.5); first use
     downloads and unpacks it via the fermion cache.
 
 protocol (one JSON object per line):
@@ -76,7 +75,7 @@ _pitch_on: bool = False  # tier wants melody; pitch then rides the response
 
 
 def _load_phonon(settings):
-    """Load the Fermion speech model named by asr.id (default Phonon-2).
+    """Load the Fermion speech model named by asr.id (default Phonon-2.5).
 
     The pip package ships its own MLX runtime and model cache; a bare
     `pip install fermion-research` is enough only on paper — the Apple
@@ -104,23 +103,23 @@ def _load_phonon(settings):
         return None, None
 
     # asr.id still holds the parakeet/photon id by default — resolve_alias
-    # passes unknown ids through, so fall back to Phonon-2 rather than
+    # passes unknown ids through, so fall back to Phonon-2.5 rather than
     # erroring on a stale config line.
     repo, entry = _resolve(settings.asr_id)
     spec = settings.asr_id
     if entry is None:
-        spec = "FermionResearch/Phonon-2"
+        spec = "FermionResearch/Phonon-2.5"
         repo, entry = _resolve(spec)
     if entry is None:
         raise RuntimeError(
             f"asr.id {settings.asr_id!r} is not a Fermion speech model — "
-            "phonon engine wants e.g. FermionResearch/Phonon-2"
+            "phonon engine wants e.g. FermionResearch/Phonon-2.5"
         )
     key = entry["profile"]
     pin = SPEECH_PROFILES[key]
     print(
         f"  … loading Phonon ASR ({spec}) via MLX "
-        "(first run downloads ~164MB)",
+        "(first run downloads ~156MB)",
         file=sys.stderr, flush=True,
     )
     engine_kind = backends.resolve("coach ASR")
@@ -277,14 +276,18 @@ def _transcribe_photon(speech, wav_path: str) -> dict:
 
 
 def _transcribe_phonon(speech, wav_path: str) -> dict:
-    """One fermion decode. Text only — no word timestamps exist on this
-    path (the runtime returns text and segment windows, not token times)."""
+    """One fermion decode. Word timestamps ride along when the runtime
+    produced them (Phonon-2 and 2.5 do); otherwise words is None."""
     result = speech.transcribe_detailed(wav_path)
     text, _decode_s, _dur_s = result.triple()
     if getattr(result, "truncated", False):
         print("  … phonon: decode hit its token budget; part of the audio "
               "may be missing from the transcript", file=sys.stderr, flush=True)
-    return {"text": text, "words": None}
+    words = None
+    if getattr(result, "words", None):
+        words = [{"word": w["text"], "start": w["start"], "end": w["end"]}
+                 for w in result.words]
+    return {"text": text, "words": words}
 
 
 def _transcribe(engine, wav_path: str) -> dict:

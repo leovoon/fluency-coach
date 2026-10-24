@@ -6,7 +6,7 @@
 
 asr:
   engine: phonon
-  id: FermionResearch/Phonon-2
+  id: FermionResearch/Phonon-2.5
 
 melody: false
 flow: false
