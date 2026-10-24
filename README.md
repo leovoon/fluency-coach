@@ -12,7 +12,7 @@ variant. The former diagnostic screen remains available at `/classic`.
 
 ## How it works
 
-- **ASR** — Fermion's Phonon-2.5 (156 MB, MLX) listens to your recording and
+- **ASR** — Fermion's [Phonon-2.5](https://huggingface.co/FermionResearch/Phonon-2.5) (156 MB, MLX) listens to your recording and
   writes down exactly what you said, with word timestamps. Also available:
   whisper.cpp's parakeet-cli (ggml/Metal) and moondream's parakeet-redux
   (Photon). Melody and flow scoring work under Phonon-2.5; the older
