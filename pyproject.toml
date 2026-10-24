@@ -1,6 +1,6 @@
 [project]
 name = "fluency-coach"
-version = "0.5.0"
+version = "0.6.0"
 description = "Local fluency coach. Your recorded voice is the reference; STT and TTS are swappable."
 readme = "README.md"
 requires-python = ">=3.11"
